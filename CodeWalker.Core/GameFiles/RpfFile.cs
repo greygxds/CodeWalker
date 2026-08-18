@@ -33,6 +33,8 @@ namespace CodeWalker.GameFiles
         public uint Version { get; set; }
         public uint EntryCount { get; set; }
         public uint NamesLength { get; set; }
+        public uint NameShift { get; set; }
+        public bool PlatformBit { get; set; }
         public RpfEncryption Encryption { get; set; }
 
         //object linkage
@@ -139,7 +141,10 @@ namespace CodeWalker.GameFiles
 
             Version = br.ReadUInt32(); //RPF Version - GTAV should be 0x52504637 (1380992567)
             EntryCount = br.ReadUInt32(); //Number of Entries
-            NamesLength = br.ReadUInt32();
+            uint namesInfo = br.ReadUInt32();
+            NamesLength = namesInfo & 0x0FFFFFFF;
+            NameShift = (namesInfo >> 28) & 0x7;
+            PlatformBit = (namesInfo & 0x80000000) != 0;
             Encryption = (RpfEncryption)br.ReadUInt32(); //0x04E45504F (1313165391): none;  0x0ffffff9 (268435449): AES
 
             if (Version != 0x52504637)
@@ -213,7 +218,7 @@ namespace CodeWalker.GameFiles
 
                 e.Read(entriesrdr);
 
-                namesrdr.Position = e.NameOffset;
+                namesrdr.Position = (long)e.NameOffset << (int)NameShift;
                 e.Name = namesrdr.ReadString();
                 if (e.Name.Length > 256)
                 {
