@@ -999,7 +999,10 @@ namespace CodeWalker.GameFiles
 
             bw.Write(Version);
             bw.Write(EntryCount);
-            bw.Write(NamesLength);
+            uint namesInfo = (NamesLength & 0x0FFFFFFF)
+                | ((NameShift & 0x7) << 28)
+                | (PlatformBit ? 0x80000000u : 0u);
+            bw.Write(namesInfo);
             bw.Write((uint)Encryption);
             bw.Write(entriesdata);
             bw.Write(namesdata);
@@ -1072,28 +1075,56 @@ namespace CodeWalker.GameFiles
         }
         private byte[] GetHeaderNamesData()
         {
-            MemoryStream namesstream = new MemoryStream();
-            DataWriter nameswriter = new DataWriter(namesstream);
-            var namedict = new Dictionary<string, uint>();
-            foreach (var entry in AllEntries)
+            for (uint shift = 0; shift <= 7; shift++)
             {
-                uint nameoffset;
-                string name = entry.Name ?? "";
-                if (namedict.TryGetValue(name, out nameoffset))
+                byte[] data;
+                if (TryGetHeaderNamesData(shift, out data))
                 {
-                    entry.NameOffset = nameoffset;
-                }
-                else
-                {
-                    entry.NameOffset = (uint)namesstream.Length;
-                    namedict.Add(name, entry.NameOffset);
-                    nameswriter.Write(name);
+                    NameShift = shift;
+                    return data;
                 }
             }
-            var buf = new byte[namesstream.Length];
-            namesstream.Position = 0;
-            namesstream.Read(buf, 0, buf.Length);
-            return PadBuffer(buf, 16);
+            throw new InvalidDataException("RPF name table cannot be represented by 16-bit shifted offsets.");
+        }
+        private bool TryGetHeaderNamesData(uint shift, out byte[] data)
+        {
+            using (MemoryStream namesstream = new MemoryStream())
+            {
+                DataWriter nameswriter = new DataWriter(namesstream);
+                var namedict = new Dictionary<string, uint>();
+                uint alignment = 1u << (int)shift;
+                foreach (var entry in AllEntries)
+                {
+                    uint nameoffset;
+                    string name = entry.Name ?? "";
+                    if (!namedict.TryGetValue(name, out nameoffset))
+                    {
+                        uint alignedPosition = PadLength((uint)namesstream.Length, alignment);
+                        while (namesstream.Length < alignedPosition)
+                        {
+                            nameswriter.Write((byte)0);
+                        }
+                        nameoffset = alignedPosition >> (int)shift;
+                        namedict.Add(name, nameoffset);
+                        nameswriter.Write(name);
+                    }
+                    if (nameoffset > ushort.MaxValue)
+                    {
+                        data = null;
+                        return false;
+                    }
+                    entry.NameOffset = nameoffset;
+                }
+                if (namesstream.Length > 0x0FFFFFFF)
+                {
+                    throw new InvalidDataException("RPF name table exceeds the 28-bit header length limit.");
+                }
+                var buf = new byte[namesstream.Length];
+                namesstream.Position = 0;
+                namesstream.Read(buf, 0, buf.Length);
+                data = PadBuffer(buf, 16);
+                return true;
+            }
         }
         private byte[] GetHeaderEntriesData()
         {
